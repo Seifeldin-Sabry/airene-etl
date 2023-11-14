@@ -14,6 +14,7 @@ class Transformer:
         tldf = self.clean_telraam_data(tldf)
         csdf = self.clean_community_sensor_data(csdf)
         merged = self.calculate_and_merge_based_on_distance(tldf, csdf)
+        merged["id"] = merged.index
         return merged
 
     def clean_telraam_data(self, tldf):
@@ -28,7 +29,9 @@ class Transformer:
 
         # Clean up NaNs
         tldf = tldf.replace("", np.nan)
-        tldf = tldf.dropna().drop(["type", "period", "uptime"], axis=1)
+        tldf = tldf.dropna().drop(
+            ["type", "period", "uptime", "bike", "pedestrian", "date"], axis=1
+        )
         tldf = tldf.drop(["last_data_package"], axis=1)
         tldf = tldf.reset_index(drop=True)
 
@@ -36,7 +39,7 @@ class Transformer:
 
     def clean_community_sensor_data(self, csdf):
         csdf_dropped = csdf.drop(
-            ["location", "sensor", "sensordatavalues", "sampling_rate", "id"], axis=1
+            ["location", "sensor", "sensordatavalues", "sampling_rate"], axis=1
         )
         expanded_location = csdf["location"].apply(pd.Series)
         expanded_sensor = csdf["sensor"].apply(pd.Series)
@@ -51,16 +54,19 @@ class Transformer:
             ],
             axis=1,
         )
+        # Change sensor names
+        csdf.columns = [
+            f"sensor {str(x)}" if isinstance(x, int) else x for x in csdf.columns
+        ]
+        csdf = csdf.drop(["exact_location", "indoor", "pin"], axis=1)
+        # Drop all "id" columns
+        csdf = csdf.drop([col for col in csdf.columns if "id" in col], axis=1)
 
         # cast longitude and latitude to float
         csdf["longitude"] = csdf["longitude"].astype(float)
         csdf["latitude"] = csdf["latitude"].astype(float)
         # Only keep Belgian sensors
         csdf = csdf[csdf["country"] == "BE"]
-        # Change sensor names
-        csdf.columns = [
-            f"sensor {str(x)}" if isinstance(x, int) else x for x in csdf.columns
-        ]
         # Change timestamp to datetime
         csdf["timestamp"] = pd.to_datetime(csdf["timestamp"]).dt.round("H")
         csdf = csdf.reset_index(drop=True)
