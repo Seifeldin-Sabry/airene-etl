@@ -3,12 +3,14 @@ import logging
 import time
 
 import azure.functions as func
-import httpx
 import numpy as np
 import pandas as pd
 import requests
 
 app = func.FunctionApp()
+
+WEATHER_API_RETRIES = 1
+THRESHOLD = 2  # kilometers
 
 
 # URLS and API KEYS #
@@ -17,7 +19,6 @@ telraam_api_key = "R0bdepMpRxP9MPVWSOPr9OGRFseK4Ov59NTa8bz5"
 community_sensor_url = "https://data.sensor.community/static/v2/data.1h.json"
 weather_api_key = "f70225a3abc24e8a9e1104007231411"
 #######################
-
 
 @app.schedule(
     schedule="0 0 * * * *", arg_name="myTimer", run_on_startup=True, use_monitor=False
@@ -190,9 +191,8 @@ class Transformer:
         # Calculate distance matrix using Haversine formula
         distance_matrix = self.calculate_distance_matrix(base_df, df_to_merge)
 
-        # Pair the rows close to eachother
-        threshold = 2  # kilometers
-        idx_pairs = np.where(distance_matrix < threshold)
+        # Pair the rows close to each other
+        idx_pairs = np.where(distance_matrix < THRESHOLD)
 
         # Combine the rows from both dataframes
         combined_data = []
@@ -216,20 +216,22 @@ class Transformer:
 
         return df
 
-    async def fetch_weather_data(self, segment_id, df):
+    async def fetch_weather_data(self, segment_id, df, retry=WEATHER_API_RETRIES):
         try:
             latitude = df.loc[df["segment_id"] == segment_id, "latitude"].iloc[0]
             longitude = df.loc[df["segment_id"] == segment_id, "longitude"].iloc[0]
-            async with httpx.AsyncClient() as client:
-                weather_response = await client.get(
-                    f"https://api.weatherapi.com/v1/current.json?key={weather_api_key}&q={latitude},{longitude}&aqi=yes"
+            weather_response = requests.get(
+                f"https://api.weatherapi.com/v1/current.json?key={weather_api_key}&q={latitude},{longitude}&aqi=yes"
+            )
+            weather_data = weather_response.json()
+            if weather_data is None:
+                print(weather_response)
+                if retry > 0:
+                    self.fetch_weather_data(segment_id, df, retry - 1)
+                raise Exception(
+                    f"Weather data is None for segment {segment_id} latitude {latitude} longitude {longitude}"
                 )
-                weather_data = weather_response.json()
-                if weather_data is None:
-                    raise Exception(
-                        f"Weather data is None for segment {segment_id} latitude {latitude} longitude {longitude}"
-                    )
-                return segment_id, str(weather_data)
+            return segment_id, str(weather_data)
         except Exception as e:
             logging.error(f"Failed to fetch weather data: {e}")
             return segment_id, None
